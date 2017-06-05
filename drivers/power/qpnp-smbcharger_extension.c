@@ -235,20 +235,6 @@ abort:
 	return rc;
 }
 
-#define DEFAULT_BATT_CHARGE_FULL	0
-static int somc_chg_get_prop_batt_charge_full(struct smbchg_chip *chip)
-{
-	int capacity, rc;
-
-	rc = get_property_from_fg(chip,
-			POWER_SUPPLY_PROP_CHARGE_FULL, &capacity);
-	if (rc) {
-		pr_smb_ext(PR_STATUS, "Couldn't get capacityl rc = %d\n", rc);
-		capacity = DEFAULT_BATT_CHARGE_FULL;
-	}
-	return capacity;
-}
-
 #define DEFAULT_BATT_CHARGE_FULL_DESIGN	0
 static int somc_chg_get_prop_batt_charge_full_design(struct smbchg_chip *chip)
 {
@@ -369,6 +355,12 @@ static void somc_chg_lrc_check(struct smbchg_chip *chip)
 		somc_chg_lrc_vote(chip, retcode);
 
 	params->lrc.status = retcode;
+
+	if (params->lrc.fake_capacity && soc > params->lrc.socmax)
+		vote(chip->usb_suspend_votable, LRC_OVER_SOC_EN_VOTER, true, 0);
+	else
+		vote(chip->usb_suspend_votable, LRC_OVER_SOC_EN_VOTER,
+								false, 0);
 	return;
 
 exit:
@@ -870,6 +862,8 @@ static void somc_chg_apsd_rerun_check_work(struct work_struct *work)
 	int rc;
 
 	if (somc_chg_is_usb_uv_hvdcp(chip)) {
+		somc_chg_charge_error_event(chip,
+					CHGERR_USBIN_UV_CONNECTED_HVDCP);
 		rc = somc_chg_apsd_wait_rerun(chip);
 		if (rc)
 			dev_err(chip->dev, "APSD rerun error rc=%d\n", rc);
@@ -1313,6 +1307,79 @@ static ssize_t somc_chg_output_voter_param(struct smbchg_chip *chip,
 	return size;
 }
 
+static void somc_chg_charge_error_event(struct smbchg_chip *chip,
+							u32 chgerr_evt)
+{
+	struct somc_charge_error *charge_error =
+					&chip->somc_params.charge_error;
+
+	if (!(charge_error->status & chgerr_evt)) {
+		charge_error->status |= chgerr_evt;
+		pr_smb(PR_SOMC, "send charge error status (%08x)\n",
+							charge_error->status);
+		power_supply_changed(&chip->batt_psy);
+	}
+}
+
+static void somc_chg_set_last_uv_time(struct smbchg_chip *chip)
+{
+	struct somc_charge_error *charge_error =
+					&chip->somc_params.charge_error;
+
+	charge_error->last_uv_time_kt = ktime_get_boottime();
+}
+
+#define UV_PERIOD_VERY_SHORT_MS		35
+#define UNACCEPTABLE_SHORT_UV_COUNT	2
+static void somc_chg_check_short_uv(struct smbchg_chip *chip)
+{
+	ktime_t now_kt, uv_period_kt;
+	s64 uv_period_ms;
+	struct somc_charge_error *charge_error =
+					&chip->somc_params.charge_error;
+
+	now_kt = ktime_get_boottime();
+	uv_period_kt = ktime_sub(now_kt, charge_error->last_uv_time_kt);
+	uv_period_ms = ktime_to_ms(uv_period_kt);
+	if (uv_period_ms > UV_PERIOD_VERY_SHORT_MS)
+		return;
+
+	charge_error->short_uv_count++;
+	if (charge_error->short_uv_count == UNACCEPTABLE_SHORT_UV_COUNT)
+		somc_chg_charge_error_event(chip, CHGERR_USBIN_SHORT_UV);
+}
+
+static void somc_chg_reset_charge_error_status_work(struct work_struct *work)
+{
+	struct somc_charge_error *charge_error = container_of(work,
+						struct somc_charge_error,
+						status_reset_work.work);
+
+	charge_error->status = 0;
+	charge_error->last_uv_time_kt = ktime_set(0, 0);
+	charge_error->short_uv_count = 0;
+}
+
+#define CHGERR_STS_RESET_DELAY_MS	4000
+static void somc_chg_start_charge_error_status_resetting(
+						struct smbchg_chip *chip)
+{
+	struct somc_charge_error *charge_error =
+					&chip->somc_params.charge_error;
+
+	schedule_delayed_work(&charge_error->status_reset_work,
+				msecs_to_jiffies(CHGERR_STS_RESET_DELAY_MS));
+}
+
+static void somc_chg_cancel_charge_error_status_resetting(
+						struct smbchg_chip *chip)
+{
+	struct somc_charge_error *charge_error =
+					&chip->somc_params.charge_error;
+
+	cancel_delayed_work_sync(&charge_error->status_reset_work);
+}
+
 static ssize_t somc_chg_param_show(struct device *dev,
 				struct device_attribute *attr,
 				char *buf);
@@ -1711,6 +1778,8 @@ static void somc_chg_init(struct chg_somc_params *params)
 			somc_chg_apsd_rerun_check_work);
 	INIT_DELAYED_WORK(&params->apsd.rerun_w,
 			somc_chg_apsd_rerun_work);
+	INIT_DELAYED_WORK(&params->charge_error.status_reset_work,
+			somc_chg_reset_charge_error_status_work);
 	pr_smb_ext(PR_INFO, "somc chg init success\n");
 }
 

@@ -9,6 +9,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
+ * Modifications are Copyright (c) 2015 Sony Mobile Communications Inc,
+ * and licensed under the license of the file.
+ */
 
 #ifndef QPNP_PON_H
 #define QPNP_PON_H
@@ -72,7 +77,10 @@ bool qpnp_pon_check_hard_reset_stored(void);
 #ifdef CONFIG_PON_SOMC_ORG
 int qpnp_pon_dvdd_shutdown(void);
 #else
-static inline int qpnp_pon_dvdd_shutdown(void) { return -ENODEV; }
+static inline int qpnp_pon_dvdd_shutdown(void)
+{
+	return -ENODEV;
+}
 #endif /* CONFIG_PON_SOMC_ORG */
 
 #else

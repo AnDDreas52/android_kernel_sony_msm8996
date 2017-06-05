@@ -9,6 +9,11 @@
  *
  *  You may use this code as per GPL version 2
  */
+/*
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
+ * Modifications are Copyright (c) 2014 Sony Mobile Communications Inc,
+ * and licensed under the license of the file.
+ */
 
 #ifndef __LINUX_POWER_SUPPLY_H__
 #define __LINUX_POWER_SUPPLY_H__
@@ -233,6 +238,9 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_SMART_CHARGING_INTERRUPTION,
 	POWER_SUPPLY_PROP_SMART_CHARGING_STATUS,
 	POWER_SUPPLY_PROP_INPUT_CURRENT_STATE,
+	POWER_SUPPLY_PROP_CHARGE_FULL_RAW,
+	POWER_SUPPLY_PROP_TIME_TO_CAP_LEARNING,
+	POWER_SUPPLY_PROP_CHGERR_STS,
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_EXT,
 	/* Properties of type `const char *' */
@@ -240,6 +248,7 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_MANUFACTURER,
 	POWER_SUPPLY_PROP_SERIAL_NUMBER,
 	POWER_SUPPLY_PROP_BATTERY_TYPE,
+	POWER_SUPPLY_PROP_CHARGER_TYPE,
 };
 
 enum power_supply_type {

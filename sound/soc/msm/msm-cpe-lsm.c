@@ -1212,6 +1212,7 @@ static int msm_cpe_lsm_ioctl_shared(struct snd_pcm_substream *substream,
 			dev_err(rtd->dev, "%s: No memory for sound model\n",
 				__func__);
 			kfree(session->conf_levels);
+			session->conf_levels = NULL;
 			return -ENOMEM;
 		}
 		session->snd_model_size = snd_model.data_size;
@@ -1223,6 +1224,8 @@ static int msm_cpe_lsm_ioctl_shared(struct snd_pcm_substream *substream,
 				__func__);
 			kfree(session->conf_levels);
 			kfree(session->snd_model_data);
+			session->conf_levels = NULL;
+			session->snd_model_data = NULL;
 			return -EFAULT;
 		}
 
@@ -1234,6 +1237,8 @@ static int msm_cpe_lsm_ioctl_shared(struct snd_pcm_substream *substream,
 			       __func__, rc);
 			kfree(session->snd_model_data);
 			kfree(session->conf_levels);
+			session->snd_model_data = NULL;
+			session->conf_levels = NULL;
 			return rc;
 		}
 
@@ -1247,6 +1252,8 @@ static int msm_cpe_lsm_ioctl_shared(struct snd_pcm_substream *substream,
 			lsm_ops->lsm_shmem_dealloc(cpe->core_handle, session);
 			kfree(session->snd_model_data);
 			kfree(session->conf_levels);
+			session->snd_model_data = NULL;
+			session->conf_levels = NULL;
 			return rc;
 		}
 

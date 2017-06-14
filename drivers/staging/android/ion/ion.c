@@ -446,7 +446,8 @@ static void user_ion_handle_get(struct ion_handle *handle)
 }
 
 /* Must hold the client lock */
-static struct ion_handle *user_ion_handle_get_check_overflow(struct ion_handle *handle)
+static struct ion_handle *user_ion_handle_get_check_overflow(
+	struct ion_handle *handle)
 {
 	if (handle->user_ref_count + 1 == 0)
 		return ERR_PTR(-EOVERFLOW);
@@ -691,8 +692,8 @@ static void ion_free_nolock(struct ion_client *client, struct ion_handle *handle
 	ion_handle_put_nolock(handle);
 }
 
-/* Must hold the client lock */
-static void user_ion_free_nolock(struct ion_client *client, struct ion_handle *handle)
+static void user_ion_free_nolock(struct ion_client *client,
+				 struct ion_handle *handle)
 {
 	bool valid_handle;
 
@@ -703,7 +704,7 @@ static void user_ion_free_nolock(struct ion_client *client, struct ion_handle *h
 		WARN(1, "%s: invalid handle passed to free.\n", __func__);
 		return;
 	}
-	if (handle->user_ref_count == 0) {
+	if (!handle->user_ref_count > 0) {
 		WARN(1, "%s: User does not have access!\n", __func__);
 		return;
 	}
@@ -883,7 +884,7 @@ static int ion_debug_client_show(struct seq_file *s, void *unused)
 		struct ion_handle *handle = rb_entry(n, struct ion_handle,
 						     node);
 
-		seq_printf(s, "%16.16s: %16zx : %16d : %12p",
+		seq_printf(s, "%16.16s: %16zx : %16d : %12pK",
 				handle->buffer->heap->name,
 				handle->buffer->size,
 				atomic_read(&handle->ref.refcount),

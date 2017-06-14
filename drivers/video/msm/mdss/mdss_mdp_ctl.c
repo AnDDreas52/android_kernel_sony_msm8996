@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -73,8 +73,18 @@ static void __mdss_mdp_mixer_write_cfg(struct mdss_mdp_mixer *mixer,
 
 static inline u64 fudge_factor(u64 val, u32 numer, u32 denom)
 {
-	u64 result = (val * (u64)numer);
-	do_div(result, denom);
+	u64 result = val;
+
+	if (val) {
+		u64 temp = -1UL;
+
+		do_div(temp, val);
+		if (temp > numer) {
+			/* no overflow, so we can do the operation*/
+			result = (val * (u64)numer);
+			do_div(result, denom);
+		}
+	}
 	return result;
 }
 
@@ -531,8 +541,7 @@ static void mdss_mdp_get_bw_vote_mode(void *data,
 
 			if ((flags & PERF_CALC_PIPE_SINGLE_LAYER) &&
 				!mixer->rotator_mode &&
-				(mixer->type !=
-				 MDSS_MDP_MIXER_TYPE_WRITEBACK))
+				(mixer->type == MDSS_MDP_MIXER_TYPE_INTF))
 					set_bit(MDSS_MDP_BW_MODE_SINGLE_LAYER,
 						perf->bw_vote_mode);
 		} else if (calc_mode == PERF_CALC_VOTE_MODE_CTL) {
@@ -678,7 +687,7 @@ int mdss_mdp_get_panel_params(struct mdss_mdp_pipe *pipe,
 
 	if (mixer->rotator_mode) {
 		*fps = mdss_mdp_get_rotator_fps(pipe);
-	} else if (mixer->type != MDSS_MDP_MIXER_TYPE_WRITEBACK) {
+	} else if (mixer->type == MDSS_MDP_MIXER_TYPE_INTF) {
 		struct mdss_panel_info *pinfo;
 
 		if (!mixer->ctl)
@@ -1101,7 +1110,7 @@ int mdss_mdp_perf_calc_pipe(struct mdss_mdp_pipe *pipe,
 		return -EINVAL;
 	}
 
-	if (mixer->type != MDSS_MDP_MIXER_TYPE_WRITEBACK) {
+	if (mixer->type == MDSS_MDP_MIXER_TYPE_INTF) {
 		if (!mixer->ctl)
 			return -EINVAL;
 		is_fbc = mixer->ctl->panel_data->panel_info.fbc.enabled;
@@ -1231,7 +1240,7 @@ static void mdss_mdp_perf_calc_mixer(struct mdss_mdp_mixer *mixer,
 			goto exit;
 		}
 
-		if (mixer->type != MDSS_MDP_MIXER_TYPE_WRITEBACK) {
+		if (mixer->type == MDSS_MDP_MIXER_TYPE_INTF) {
 			if (pinfo->type == MIPI_VIDEO_PANEL) {
 				fps = pinfo->panel_max_fps;
 				v_total = pinfo->panel_max_vtotal;
@@ -1298,7 +1307,7 @@ static void mdss_mdp_perf_calc_mixer(struct mdss_mdp_mixer *mixer,
 	* for single video playback use case
 	*/
 	if (IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev, MDSS_MDP_HW_REV_101)
-		 && mixer->type != MDSS_MDP_MIXER_TYPE_WRITEBACK) {
+		 && mixer->type == MDSS_MDP_MIXER_TYPE_INTF) {
 		u32 npipes = 0;
 		for (i = 0; i < num_pipes; i++) {
 			pipe = pipe_list[i];
@@ -2458,10 +2467,6 @@ struct mdss_mdp_mixer *mdss_mdp_mixer_alloc(
 			nmixers -= ctl->mdata->ndspp;
 		}
 		break;
-	case MDSS_MDP_MIXER_TYPE_INTF_NO_DSPP:
-		mixer_pool = ctl->mdata->mixer_intf + ctl->mdata->ndspp;
-		nmixers = nmixers_intf - ctl->mdata->ndspp;
-		break;
 
 	case MDSS_MDP_MIXER_TYPE_WRITEBACK:
 		mixer_pool = ctl->mdata->mixer_wb;
@@ -3432,32 +3437,6 @@ static int mdss_mdp_ctl_fbc_enable(int enable,
 	return 0;
 }
 
-void mdss_mdp_get_interface_type(struct mdss_mdp_ctl *ctl, int *intf_type,
-		int *split_needed)
-{
-	u32 panel_width = get_panel_width(ctl);
-	u32 max_mixer_width = ctl->mdata->max_mixer_width;
-	u32 nmixer_without_dspp = ctl->mdata->nmixers_intf - ctl->mdata->ndspp;
-	*intf_type = MDSS_MDP_MIXER_TYPE_INTF;
-	*split_needed = false;
-
-	/*
-	 * On devices having mixers without DSPP, mixers with DSPP are
-	 * reserved for primary display. For external displays, allocate
-	 * two such mixers if available. Or else, we can do with one such
-	 * mixer since they can support upto 4K width.
-	 */
-
-	if (ctl->panel_data->panel_info.type == DTV_PANEL
-			&& nmixer_without_dspp) {
-		*intf_type = MDSS_MDP_MIXER_TYPE_INTF_NO_DSPP;
-		if (panel_width > max_mixer_width && nmixer_without_dspp >= 2)
-			*split_needed = true;
-	} else if (panel_width > max_mixer_width) {
-		*split_needed = true;
-	}
-}
-
 int mdss_mdp_ctl_setup(struct mdss_mdp_ctl *ctl)
 {
 	struct mdss_mdp_ctl *split_ctl;
@@ -3465,7 +3444,6 @@ int mdss_mdp_ctl_setup(struct mdss_mdp_ctl *ctl)
 	int split_fb, rc = 0;
 	u32 max_mixer_width;
 	struct mdss_panel_info *pinfo;
-	int intf_type, needs_split;
 
 	if (!ctl || !ctl->panel_data) {
 		pr_err("invalid ctl handle\n");
@@ -3501,17 +3479,10 @@ int mdss_mdp_ctl_setup(struct mdss_mdp_ctl *ctl)
 	ctl->height = height;
 	ctl->roi = (struct mdss_rect) {0, 0, width, height};
 
-	mdss_mdp_get_interface_type(ctl, &intf_type, &needs_split);
-
-	if (split_fb)
-		width = ctl->mfd->split_fb_left;
-	else if (needs_split)
-		width /= 2;
-
 	if (!ctl->mixer_left) {
 		ctl->mixer_left =
-			mdss_mdp_mixer_alloc(ctl, intf_type,
-			 (needs_split || split_fb), 0);
+			mdss_mdp_mixer_alloc(ctl, MDSS_MDP_MIXER_TYPE_INTF,
+			 ((width > max_mixer_width) || split_fb), 0);
 		if (!ctl->mixer_left) {
 			pr_err("unable to allocate layer mixer\n");
 			return -ENOMEM;
@@ -3522,13 +3493,65 @@ int mdss_mdp_ctl_setup(struct mdss_mdp_ctl *ctl)
 		}
 	}
 
+	if (split_fb) {
+		width = ctl->mfd->split_fb_left;
+		width += (pinfo->lcdc.border_left +
+				pinfo->lcdc.border_right);
+	} else if (width > max_mixer_width) {
+		width /= 2;
+	}
+
 	ctl->mixer_left->width = width;
 	ctl->mixer_left->height = height;
 	ctl->mixer_left->roi = (struct mdss_rect) {0, 0, width, height};
 	ctl->mixer_left->valid_roi = true;
 	ctl->mixer_left->roi_changed = true;
 
-	rc = mdss_mdp_pp_default_overlay_config(ctl->mfd, ctl->panel_data);
+	if (ctl->mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY) {
+		pr_debug("dual display detected\n");
+	} else {
+		if (split_fb)
+			width = ctl->mfd->split_fb_right;
+
+		if (width < ctl->width) {
+			if (ctl->mixer_right == NULL) {
+				ctl->mixer_right = mdss_mdp_mixer_alloc(ctl,
+					MDSS_MDP_MIXER_TYPE_INTF, true, 0);
+				if (!ctl->mixer_right) {
+					pr_err("unable to allocate right mixer\n");
+					if (ctl->mixer_left)
+						mdss_mdp_mixer_free(
+							ctl->mixer_left);
+					return -ENOMEM;
+				}
+			}
+			ctl->mixer_right->is_right_mixer = true;
+			ctl->mixer_right->width = width;
+			ctl->mixer_right->height = height;
+			ctl->mixer_right->roi = (struct mdss_rect)
+						{0, 0, width, height};
+			ctl->mixer_right->valid_roi = true;
+			ctl->mixer_right->roi_changed = true;
+		} else if (ctl->mixer_right) {
+			ctl->mixer_right->valid_roi = false;
+			ctl->mixer_right->roi_changed = false;
+			mdss_mdp_mixer_free(ctl->mixer_right);
+			ctl->mixer_right = NULL;
+		}
+
+		if (ctl->mixer_right) {
+			if (!is_dsc_compression(pinfo) ||
+				(pinfo->dsc_enc_total == 1))
+				ctl->opmode |= MDSS_MDP_CTL_OP_PACK_3D_ENABLE |
+				       MDSS_MDP_CTL_OP_PACK_3D_H_ROW_INT;
+		} else {
+			ctl->opmode &= ~(MDSS_MDP_CTL_OP_PACK_3D_ENABLE |
+				  MDSS_MDP_CTL_OP_PACK_3D_H_ROW_INT);
+		}
+	}
+
+	rc = mdss_mdp_pp_default_overlay_config(ctl->mfd, ctl->panel_data,
+						true);
 	/*
 	 * Ignore failure of PP config, ctl set-up can succeed.
 	 */
@@ -3536,49 +3559,6 @@ int mdss_mdp_ctl_setup(struct mdss_mdp_ctl *ctl)
 		pr_err("failed to set the pp config rc %dfb %d\n", rc,
 			ctl->mfd->index);
 		rc = 0;
-	}
-
-	if (ctl->mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY) {
-		pr_debug("dual display detected\n");
-		return 0;
-	}
-
-	if (split_fb)
-		width = ctl->mfd->split_fb_right;
-
-	if (width < ctl->width) {
-		if (ctl->mixer_right == NULL) {
-			ctl->mixer_right = mdss_mdp_mixer_alloc(ctl,
-					intf_type, true, 0);
-			if (!ctl->mixer_right) {
-				pr_err("unable to allocate right mixer\n");
-				if (ctl->mixer_left)
-					mdss_mdp_mixer_free(ctl->mixer_left);
-				return -ENOMEM;
-			}
-		}
-		ctl->mixer_right->is_right_mixer = true;
-		ctl->mixer_right->width = width;
-		ctl->mixer_right->height = height;
-		ctl->mixer_right->roi = (struct mdss_rect)
-						{0, 0, width, height};
-		ctl->mixer_right->valid_roi = true;
-		ctl->mixer_right->roi_changed = true;
-	} else if (ctl->mixer_right) {
-		ctl->mixer_right->valid_roi = false;
-		ctl->mixer_right->roi_changed = false;
-		mdss_mdp_mixer_free(ctl->mixer_right);
-		ctl->mixer_right = NULL;
-	}
-
-	if (ctl->mixer_right) {
-		if (!is_dsc_compression(pinfo) ||
-		    (pinfo->dsc_enc_total == 1))
-			ctl->opmode |= MDSS_MDP_CTL_OP_PACK_3D_ENABLE |
-				       MDSS_MDP_CTL_OP_PACK_3D_H_ROW_INT;
-	} else {
-		ctl->opmode &= ~(MDSS_MDP_CTL_OP_PACK_3D_ENABLE |
-				  MDSS_MDP_CTL_OP_PACK_3D_H_ROW_INT);
 	}
 	return 0;
 }
@@ -3938,6 +3918,9 @@ int mdss_mdp_ctl_destroy(struct mdss_mdp_ctl *ctl)
 	rc = mdss_mdp_ctl_intf_event(ctl, MDSS_EVENT_CLOSE, NULL,
 				     CTL_INTF_EVENT_FLAG_DEFAULT);
 	WARN(rc, "unable to close panel for intf=%d\n", ctl->intf_num);
+
+	(void) mdss_mdp_pp_default_overlay_config(ctl->mfd, ctl->panel_data,
+							false);
 
 	sctl = mdss_mdp_get_split_ctl(ctl);
 	if (sctl) {
@@ -4901,14 +4884,11 @@ int mdss_mdp_mixer_addr_setup(struct mdss_data_type *mdata,
 		head[i].num = i;
 		if (type == MDSS_MDP_MIXER_TYPE_INTF && dspp_offsets
 				&& pingpong_offsets) {
-			head[i].pingpong_base = mdata->mdss_io.base +
-				pingpong_offsets[i];
-			if (mdata->ndspp > i) {
+			if (mdata->ndspp > i)
 				head[i].dspp_base = mdata->mdss_io.base +
-					dspp_offsets[i];
-			} else {
-				head[i].type = MDSS_MDP_MIXER_TYPE_INTF_NO_DSPP;
-			}
+						dspp_offsets[i];
+			head[i].pingpong_base = mdata->mdss_io.base +
+					pingpong_offsets[i];
 		}
 	}
 
